@@ -1,0 +1,436 @@
+// ignore_for_file: no_leading_underscores_for_local_identifiers
+import 'dart:math';
+import 'package:blue/bluetooth.dart';
+import 'package:blue/recivier.dart';
+import 'package:flutter/material.dart';
+
+// ignore: must_be_immutable
+class QuantumCircuitDesignerHome extends StatefulWidget {
+  String getdata;
+  QuantumCircuitDesignerHome({super.key, required this.getdata});
+
+  @override
+  _QuantumCircuitDesignerHomeState createState() =>
+      _QuantumCircuitDesignerHomeState();
+}
+
+class _QuantumCircuitDesignerHomeState
+    extends State<QuantumCircuitDesignerHome> {
+  List<List<String>> circuit = List.generate(3, (_) => List.filled(5, ''));
+  final String_receivedMessages = [];
+  int qubitCount = 3;
+  double scale = 1.0;
+  String currentState = '|00>'; // Store arguments
+  final messageListener = ValueNotifier(<String>[]);
+
+  @override
+  void initState() {
+    super.initState();
+    allBluetooth.listenForData.listen((event) {
+      if (event != null) {
+        messageListener.value = [
+          ...messageListener.value,
+          event,
+        ];
+      }
+    });
+    // Try to safely extract arguments
+    Future<void> _initializeBluetooth() async {
+      allBluetooth.listenForData.listen((event) {});
+    }
+
+    // Listen for incoming circuit data from Bob
+    allBluetooth.listenForData.listen((event) {
+      if (event != null && event.startsWith('CIRCUIT:')) {
+        // Parse the circuit data
+        List<String> circuitData =
+            event.replaceFirst('CIRCUIT:', '').split(',');
+        setState(() {
+          for (int i = 0; i < circuit.length; i++) {
+            for (int j = 0; j < circuit[i].length; j++) {
+              circuit[i][j] = circuitData[i * circuit[i].length + j];
+            }
+          }
+        });
+      }
+    });
+  }
+
+  void addGate(String gate, int qubit, int position) {
+    setState(() {
+      if (position < circuit[qubit].length) {
+        if (gate == 'CNOT') {
+          // Find adjacent qubit for CNOT control/target
+          for (int i = 0; i < circuit.length; i++) {
+            if (i != qubit && circuit[i][position].isEmpty) {
+              if (i == (qubit + 1) % circuit.length ||
+                  i == (qubit - 1 + circuit.length) % circuit.length) {
+                circuit[qubit][position] = 'CNOT_control';
+                circuit[i][position] = 'CNOT_target';
+                break;
+              }
+            }
+          }
+        } else if (gate == 'M') {
+          // When measurement gate is added, generate a random state
+          circuit[qubit][position] = gate;
+          currentState = generateRandomState();
+        } else {
+          circuit[qubit][position] = gate;
+        }
+
+        // Send circuit data to Bob or handle circuit update
+        sendCircuitToBob();
+      }
+    });
+  }
+
+  String generateRandomState() {
+    // Randomly generate a 2-qubit state
+    final random = Random();
+    int state = random.nextInt(4); // 0, 1, 2, or 3
+
+    // Convert to binary representation
+    String binaryState = state.toRadixString(2).padLeft(2, '0');
+
+    return '|$binaryState>';
+  }
+
+  void sendCircuitToBob() {
+    // Convert circuit to a comma-separated string
+    List<String> flattenedCircuit = circuit.expand((row) => row).toList();
+    String circuitData = 'CIRCUIT:' + flattenedCircuit.join(',');
+    allBluetooth.sendMessage(circuitData);
+  }
+
+  void resetCircuit() {
+    setState(() {
+      circuit = List.generate(qubitCount, (_) => List.filled(5, ''));
+      sendCircuitToBob();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Your playing as Bob'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: resetCircuit,
+            tooltip: 'Reset Circuit',
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          Container(
+            height: 40,
+            color: Colors.grey[200],
+            child: const Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                DraggableGateItem(
+                    gateName: 'H', gateSymbol: 'H', color: Colors.blue),
+                DraggableGateItem(
+                    gateName: 'X', gateSymbol: 'X', color: Colors.blue),
+                DraggableGateItem(
+                    gateName: 'CNOT', gateSymbol: 'CNOT', color: Colors.blue),
+                DraggableGateItem(
+                    gateName: 'M', gateSymbol: 'M', color: Colors.blue),
+              ],
+            ),
+          ),
+          Expanded(
+            child: InteractiveViewer(
+              boundaryMargin: const EdgeInsets.all(10.0),
+              minScale: 0.5,
+              maxScale: 4.0,
+              onInteractionUpdate: (details) {
+                setState(() {
+                  scale = details.scale;
+                });
+              },
+              child: Padding(
+                padding: const EdgeInsets.all(8.0),
+                child: Container(
+                  color: Colors.white,
+                  child: CustomPaint(
+                    painter: CircuitPainter(
+                      circuit: circuit, widget.getdata,
+                      scale: scale, // Pass the arguments
+                    ),
+                    child: Stack(
+                      children: [
+                        for (int i = 0; i < qubitCount; i++)
+                          for (int j = 0; j < circuit[i].length; j++)
+                            Positioned(
+                              left: 150 * scale + j * 60.0 * scale,
+                              top: i * 100.0 * scale,
+                              child: DragTarget<String>(
+                                builder:
+                                    (context, candidateData, rejectedData) {
+                                  return Container(
+                                    width: 60 * scale,
+                                    height: 100 * scale,
+                                    color: Colors.transparent,
+                                  );
+                                },
+                                onAccept: (data) {
+                                  addGate(data, i, j);
+                                },
+                              ),
+                            ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+      bottomNavigationBar: Padding(
+        padding: const EdgeInsets.all(8.0),
+        child: ElevatedButton(
+          onPressed: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                  builder: (context) => ReceiverScreen(
+                        data: widget.getdata,
+                      )),
+            );
+          },
+          child: const Text("Next"),
+        ),
+      ),
+    );
+  }
+}
+
+class DraggableGateItem extends StatelessWidget {
+  final String gateName;
+  final String gateSymbol;
+  final Color color;
+
+  const DraggableGateItem({
+    Key? key,
+    required this.gateName,
+    required this.gateSymbol,
+    required this.color,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return Draggable<String>(
+      data: gateName,
+      feedback:
+          GateItem(gateName: gateName, gateSymbol: gateSymbol, color: color),
+      childWhenDragging: GateItem(
+          gateName: gateName,
+          gateSymbol: gateSymbol,
+          color: color.withOpacity(0.5)),
+      child: GateItem(gateName: gateName, gateSymbol: gateSymbol, color: color),
+    );
+  }
+}
+
+class GateItem extends StatelessWidget {
+  final String gateName;
+  final String gateSymbol;
+  final Color color;
+
+  const GateItem({
+    Key? key,
+    required this.gateName,
+    required this.gateSymbol,
+    required this.color,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.all(8),
+      width: 40,
+      height: 40,
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Center(
+        child: Text(
+          gateSymbol,
+          style: const TextStyle(
+              fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white),
+        ),
+      ),
+    );
+  }
+}
+
+void drawSquareBracket(
+    Canvas canvas, double scale, double verticalSpacing, double leftPadding) {
+  final paint = Paint()
+    ..color = Colors.black
+    ..strokeWidth = 4 * scale
+    ..style = PaintingStyle.stroke;
+
+  final path = Path();
+
+  // Adjust the positions for the square bracket
+  double bracketStartY = verticalSpacing / 2; // Bob's qubit line
+  double bracketEndY =
+      verticalSpacing * 2 - verticalSpacing / 2; // Alice's line
+  double bracketX = leftPadding - 90 * scale; // Adjusted further left
+
+  // Draw the square bracket
+  path.moveTo(bracketX, bracketStartY); // Top vertical start
+  path.lineTo(bracketX, bracketEndY); // Vertical line
+
+  // Top horizontal line
+  path.moveTo(bracketX, bracketStartY);
+  path.lineTo(bracketX + 20 * scale, bracketStartY);
+
+  // Bottom horizontal line
+  path.moveTo(bracketX, bracketEndY);
+  path.lineTo(bracketX + 20 * scale, bracketEndY);
+
+  canvas.drawPath(path, paint);
+}
+
+class CircuitPainter extends CustomPainter {
+  final List<List<String>> circuit;
+  final double scale;
+  final String getdata;
+  CircuitPainter(this.getdata, {required this.circuit, this.scale = 1.0});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final linePaint = Paint()
+      ..color = Colors.black
+      ..strokeWidth = 2 * scale;
+
+    final textPainter = TextPainter(
+      textDirection: TextDirection.ltr,
+    );
+
+    double gateSize = 40 * scale;
+    double verticalSpacing = 100 * scale; // Increased vertical spacing
+    double horizontalSpacing = 60 * scale;
+    double leftPadding = 150 * scale; // Increased left padding
+
+    drawSquareBracket(canvas, scale, verticalSpacing, leftPadding);
+
+    for (int i = 0; i < circuit.length; i++) {
+      String name = (i == 0) ? 'Bob      ' : 'Alice      ';
+      String label = '$name (q$i $getdata';
+      // Draw qubit line
+      canvas.drawLine(
+        Offset(leftPadding, i * verticalSpacing + verticalSpacing / 2),
+        Offset(leftPadding + circuit[i].length * horizontalSpacing,
+            i * verticalSpacing + verticalSpacing / 2),
+        linePaint,
+      );
+
+      // Draw label
+      textPainter.text = TextSpan(
+        text: label,
+        style: TextStyle(
+          color: Colors.black,
+          fontSize: 14 * scale,
+          fontWeight: FontWeight.bold,
+        ),
+      );
+      textPainter.layout();
+      textPainter.paint(
+        canvas,
+        Offset(
+          leftPadding - 120 * scale, // Adjusted for longer labels
+          i * verticalSpacing + (verticalSpacing - textPainter.height) / 2,
+        ),
+      );
+    }
+    // Draw gates
+    for (int i = 0; i < circuit.length; i++) {
+      for (int j = 0; j < circuit[i].length; j++) {
+        if (circuit[i][j].isNotEmpty) {
+          drawGate(canvas, circuit[i][j], leftPadding + j * horizontalSpacing,
+              i * verticalSpacing + verticalSpacing / 2, gateSize);
+        }
+      }
+    }
+    for (int j = 0; j < circuit[0].length; j++) {
+      for (int controlQubit = 0;
+          controlQubit < circuit.length;
+          controlQubit++) {
+        if (circuit[controlQubit][j] == 'CNOT_control') {
+          // Find the target qubit
+          for (int targetQubit = 0;
+              targetQubit < circuit.length;
+              targetQubit++) {
+            if (circuit[targetQubit][j] == 'CNOT_target' &&
+                (targetQubit - controlQubit).abs() == 1) {
+              final cnotPaint = Paint()
+                ..color = Colors.blue
+                ..strokeWidth = 2 * scale;
+              double x =
+                  leftPadding + j * horizontalSpacing + horizontalSpacing / 2;
+              double y1 = controlQubit * verticalSpacing + verticalSpacing / 2;
+              double y2 = targetQubit * verticalSpacing + verticalSpacing / 2;
+              // Draw vertical line for CNOT connection
+              canvas.drawLine(Offset(x, y1), Offset(x, y2), cnotPaint);
+              // Draw control point (filled circle)
+              canvas.drawCircle(Offset(x, y1), 4 * scale, cnotPaint);
+              // Draw target point (circle with plus)
+              canvas.drawCircle(Offset(x, y2), 10 * scale,
+                  cnotPaint..style = PaintingStyle.stroke);
+              canvas.drawLine(Offset(x - 10 * scale, y2),
+                  Offset(x + 10 * scale, y2), cnotPaint);
+              canvas.drawLine(Offset(x, y2 - 10 * scale),
+                  Offset(x, y2 + 10 * scale), cnotPaint);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  void drawGate(Canvas canvas, String gate, double x, double y, double size) {
+    final paint = Paint();
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: gate == 'CNOT_control' || gate == 'CNOT_target' ? '' : gate,
+        style: TextStyle(
+            color: Colors.white,
+            fontSize: 14 * scale,
+            fontWeight: FontWeight.bold),
+      ),
+      textDirection: TextDirection.ltr,
+    );
+    textPainter.layout();
+    switch (gate) {
+      case 'H':
+      case 'M':
+      case 'X':
+        paint.color = Colors.blue;
+        canvas.drawRect(
+            Rect.fromCenter(center: Offset(x, y), width: size, height: size),
+            paint);
+        break;
+      case 'CNOT_control':
+      case 'CNOT_target':
+        // Don't draw anything here, it's handled in the main paint method
+        return;
+    }
+    textPainter.paint(
+        canvas, Offset(x - textPainter.width / 2, y - textPainter.height / 2));
+  }
+
+  // Draw gate label
+  @override
+  bool shouldRepaint(CustomPainter oldDelegate) {
+    return true;
+  }
+}
